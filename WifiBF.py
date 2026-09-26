@@ -260,8 +260,7 @@ def pwd(ssid, file):
                 save_state(state)
                 print(GREEN, "[*] Result saved to {}".format(_state_path(ssid)), RESET)
                 return
-            if number % 25 == 0:  # checkpoint periodically
-                save_state(state)
+            save_state(state)  # persist after every attempt (survives power loss)
         state["status"] = "exhausted"
         save_state(state)
         print(RED, "[-] Wordlist exhausted for '{}', no password found.".format(ssid), RESET)
