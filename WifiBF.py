@@ -8,20 +8,27 @@ import os.path
 import platform
 import re
 import time
+IS_MACOS = platform.system() == "Darwin"
+
+HAS_PYWIFI = False
 try:
     import pywifi
     from pywifi import PyWiFi
     from pywifi import const
     from pywifi import Profile
-except:
-    print("Installing pywifi")
+    HAS_PYWIFI = True
+except Exception:
+    # pywifi has no working backend on macOS; scanning uses system_profiler
+    # and only the connect/crack loop needs pywifi (Linux/Windows).
+    if not IS_MACOS:
+        print("[-] pywifi not available. Install it with: pip install pywifi")
 
 
 # By Brahim Jarrar ~
 # GITHUB : https://github.com/BrahimJarrar/ ~
 # CopyRight 2019 ~
 
-RED   = "\033[1;31m"  
+RED   = "\033[1;31m"
 BLUE  = "\033[1;34m"
 CYAN  = "\033[1;36m"
 GREEN = "\033[0;32m"
@@ -29,19 +36,15 @@ RESET = "\033[0;0m"
 BOLD    = "\033[;1m"
 REVERSE = "\033[;7m"
 
-try:
-    # wlan
-    wifi = PyWiFi()
-    ifaces = wifi.interfaces()[0]
-
-    ifaces.scan() #check the card
-    results = ifaces.scan_results()
-
-
-    wifi = pywifi.PyWiFi()
-    iface = wifi.interfaces()[0]
-except:
-    print("[-] Error system")
+iface = None
+ifaces = None
+if HAS_PYWIFI:
+    try:
+        wifi = pywifi.PyWiFi()
+        iface = wifi.interfaces()[0]
+        ifaces = iface
+    except Exception:
+        print("[-] Error: no WiFi interface found")
 
 type = False
 
@@ -142,6 +145,11 @@ def scan_networks():
     for i, (ssid, signal) in enumerate(sorted_nets, 1):
         print("  {}[{}]{} {}  ({} dBm)".format(BOLD, i, RESET, ssid, signal))
 
+    if IS_MACOS and len(sorted_nets) <= 1:
+        print(CYAN, "\n[i] Only found the current network. To see nearby ones on macOS:")
+        print("    - run WITHOUT sudo:  python3 WifiBF.py")
+        print("    - enable System Settings > Privacy & Security > Location Services for Terminal", RESET)
+
     print(BLUE)
     while True:
         choice = input("\n[*] Select network number: ")
@@ -194,6 +202,14 @@ def menu():
         ssid = args.ssid
     else:
         ssid = scan_networks()
+
+    # The connect/crack loop needs pywifi, which has no macOS backend.
+    if iface is None:
+        print(RED, "\n[-] No usable WiFi backend for connecting on this system.", RESET)
+        if IS_MACOS:
+            print(CYAN, "[i] pywifi cannot drive WiFi on macOS, so the password-testing")
+            print("    loop won't run here. Run this tool on Linux (with pywifi) for that.", RESET)
+        exit()
 
     # wordlist: use -w if given, otherwise ask
     if args.wordlist:
