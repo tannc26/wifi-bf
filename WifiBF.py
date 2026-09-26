@@ -70,6 +70,92 @@ def main(ssid, password, number):
     else:
         print(RED, '[{}] Crack Failed using {}'.format(number, password))
 
+def _parse_signal(signal_noise):
+    # "-74 dBm / -78 dBm" -> -74 ; missing/unknown -> very weak
+    try:
+        return int(signal_noise.split("dBm")[0].strip())
+    except (ValueError, AttributeError, IndexError):
+        return -999
+
+
+def _scan_macos():
+    # pywifi has no working macOS backend, so use the native system_profiler
+    import json
+    import subprocess
+
+    out = subprocess.check_output(
+        ["system_profiler", "SPAirPortDataType", "-json"],
+        stderr=subprocess.DEVNULL,
+    )
+    data = json.loads(out)
+
+    networks = {}
+    for iface_info in data.get("SPAirPortDataType", []):
+        for ap in iface_info.get("spairport_airport_interfaces", []):
+            # networks other than the one we are connected to
+            for net in ap.get("spairport_airport_other_local_wireless_networks", []):
+                ssid = net.get("_name")
+                if not ssid:
+                    continue
+                sig = _parse_signal(net.get("spairport_signal_noise", ""))
+                if ssid not in networks or sig > networks[ssid]:
+                    networks[ssid] = sig
+            # the currently connected network (nested one level down)
+            cur = ap.get("spairport_current_network_information")
+            if isinstance(cur, dict):
+                ssid = cur.get("_name")
+                if ssid:
+                    sig = _parse_signal(cur.get("spairport_signal_noise", ""))
+                    if ssid not in networks or sig > networks[ssid]:
+                        networks[ssid] = sig
+    return networks
+
+
+def scan_networks():
+    print(CYAN, "[~] Scanning for WiFi networks...", RESET)
+
+    if platform.system() == "Darwin":
+        try:
+            networks = _scan_macos()
+        except Exception as e:
+            print(RED, "[-] Scan failed: {}".format(e), RESET)
+            exit()
+    else:
+        iface.scan()
+        time.sleep(3)  # give the card time to finish scanning
+        networks = {}
+        for net in iface.scan_results():
+            ssid = net.ssid
+            if not ssid:
+                continue
+            if ssid not in networks or net.signal > networks[ssid]:
+                networks[ssid] = net.signal
+
+    # sort by signal strength (strongest first)
+    sorted_nets = sorted(networks.items(), key=lambda x: x[1], reverse=True)
+
+    if not sorted_nets:
+        print(RED, "[-] No networks found.", RESET)
+        exit()
+
+    print(GREEN, "\n[+] Available networks:\n", RESET)
+    for i, (ssid, signal) in enumerate(sorted_nets, 1):
+        print("  {}[{}]{} {}  ({} dBm)".format(BOLD, i, RESET, ssid, signal))
+
+    print(BLUE)
+    while True:
+        choice = input("\n[*] Select network number: ")
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(sorted_nets):
+                selected = sorted_nets[idx - 1][0]
+                print(GREEN, "[+] Selected: {}".format(selected), RESET)
+                return selected
+        except ValueError:
+            pass
+        print(RED, "[-] Invalid choice, try again.", BLUE)
+
+
 def pwd(ssid, file):
     number = 0
     with open(file, 'r', encoding='utf8') as words:
@@ -97,18 +183,24 @@ def menu():
     print(CYAN, "[+] You are using ", BOLD, platform.system(), platform.machine(), "...")
     time.sleep(2.5)
 
-    if args.wordlist and args.ssid:
-        ssid = args.ssid
-        filee = args.wordlist
-    elif args.version:
+    if args.version:
         print("\n\n",CYAN,"by Brahim Jarrar\n")
         print(RED, " github", BLUE," : https://github.com/BrahimJarrar/\n")
         print(GREEN, " CopyRight 2019\n\n")
         exit()
+
+    # SSID: use the one passed with -s, otherwise scan and let the user pick
+    if args.ssid:
+        ssid = args.ssid
+    else:
+        ssid = scan_networks()
+
+    # wordlist: use -w if given, otherwise ask
+    if args.wordlist:
+        filee = args.wordlist
     else:
         print(BLUE)
-        ssid = input("[*] SSID: ")
-        filee = input("[*] pwds file: : ")
+        filee = input("[*] pwds file: ")
 
 
     # thx
