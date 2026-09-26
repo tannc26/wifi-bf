@@ -179,7 +179,7 @@ def menu():
     parser = argparse.ArgumentParser(description='argparse Example')
 
     parser.add_argument('-s', '--ssid', metavar='', type=str, help='SSID = WIFI Name..')
-    parser.add_argument('-w', '--wordlist', metavar='', type=str, help='keywords list ...')
+    parser.add_argument('-w', '--wordlist', metavar='', type=str, help='keywords list (default: words-vi.txt)')
 
     group1 = parser.add_mutually_exclusive_group()
 
@@ -211,12 +211,16 @@ def menu():
             print("    loop won't run here. Run this tool on Linux (with pywifi) for that.", RESET)
         exit()
 
-    # wordlist: use -w if given, otherwise ask
+    # wordlist: use -w if given, otherwise default to words-vi.txt next to
+    # this script (just press Enter to accept the default).
+    default_wordlist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "words-vi.txt")
     if args.wordlist:
         filee = args.wordlist
     else:
         print(BLUE)
-        filee = input("[*] pwds file: ")
+        filee = input("[*] pwds file [{}]: ".format(default_wordlist)).strip()
+        if not filee:
+            filee = default_wordlist
 
 
     # thx
