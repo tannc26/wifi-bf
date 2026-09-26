@@ -102,3 +102,6 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# local scan/crack progress (per-SSID state, may contain passwords)
+results/
